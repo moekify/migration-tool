@@ -47,6 +47,18 @@ function migrateFieldOptions(fieldDetails) {
     };
   }
 
+  if (fieldDetails.interface === "checkboxes") {
+    return {
+      choices: Object.entries(fieldDetails.options.choices).map(
+        ([value, text]) => ({
+          text,
+          value,
+        })
+      ),
+      allowOther: fieldDetails.options.allow_other
+    };
+  }
+
   if (fieldDetails.interface === "status") {
     return {
       choices: Object.values(fieldDetails.options.status_mapping).map(
@@ -130,7 +142,7 @@ function migrateCollection(collection) {
         return {
           field: details.field,
           type:
-            details.datatype?.toLowerCase() === "text"
+            details.datatype?.toLowerCase() === "text" || details.datatype?.toLowerCase() === "longtext"
               ? "text"
               : typeMap[details.type.toLowerCase()],
           meta: {
@@ -236,7 +248,6 @@ function migrateCollection(collection) {
 
 async function migrateRelations(context) {
   const relations = await apiV8.get("/relations", { params: { limit: -1 } });
-
   const relationsV9 = relations.data.data
     .filter((relation) => {
       return (
@@ -246,15 +257,20 @@ async function migrateRelations(context) {
     })
     .map((relation) => ({
       // @NOTE: one_primary will be removed from Directus soon, so i'm not too worried about it here
-      many_collection: relation.collection_many,
-      many_field: relation.field_many,
-      many_primary: "id",
-      one_collection: relation.collection_one,
-      one_field: relation.field_one,
-      one_primary: "id",
-      junction_field: relation.junction_field,
+      meta: {
+        many_collection: relation.collection_many,
+        many_field: relation.field_many,
+        many_primary: "id",
+        one_collection: relation.collection_one,
+        one_field: relation.field_one,
+        one_primary: "id",
+        junction_field: relation.junction_field,
+      },
+      field: relation.field_many,
+      collection: relation.collection_many,
+      related_collection: relation.collection_one,
+      schema: null,
     }));
-
   const systemFields = context.collections
     .map((collection) =>
       Object.values(collection.fields)
@@ -262,17 +278,31 @@ async function migrateRelations(context) {
           return details.type === "file" || details.type.startsWith("user");
         })
         .map((field) => ({
-          many_field: field.field,
-          many_collection: collection.collection,
-          many_primary: "id",
-          one_collection:
-            field.type === "file" ? "directus_files" : "directus_users",
-          one_primary: "id",
+          meta: {
+            many_field: field.field,
+            many_collection: collection.collection,
+            many_primary: "id",
+            one_collection:
+              field.type === "file" ? "directus_files" : "directus_users",
+            one_primary: "id",
+          },
+          field: field.field,
+          collection: collection.collection,
+          related_collection:  field.type === "file" ? "directus_files" : "directus_users",
+          schema: null,
         }))
     )
     .flat();
 
-  await apiV9.post("/relations", [...relationsV9, ...systemFields]);
+  // If you want it to skip the errors it encounters, you can comment out here. Then you need to add missing relations manually
+    try {
+      await Promise.allSettled([...relationsV9, ...systemFields].map( async (relation) => await apiV9.post("/relations",relation)));
+   } catch (err) {
+     console.log(err)
+   }
+  // for (const relation of [...relationsV9, ...systemFields]) {
+  //   await apiV9.post("/relations", relation);
+  // }
 
   context.relations = [...relationsV9, ...systemFields];
 }
